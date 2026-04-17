@@ -242,8 +242,8 @@ export async function checkAndUpdateAlerts(): Promise<ActiveAlert[]> {
   const addedAlerts = newAlerts.filter(a => !previousKeys.has(a.groupKey));
   const resolvedAlerts = previousAlerts.filter(a => !newKeys.has(a.groupKey));
 
-  // Send HA notifications for new alerts, dismiss resolved ones
-  await sendHANotifications(addedAlerts);
+  // Send HA notifications & events for new alerts, dismiss resolved ones
+  await sendHANotifications(addedAlerts, config);
   await dismissHANotifications(resolvedAlerts);
 
   // Save and emit
@@ -269,7 +269,7 @@ export async function checkAndUpdateAlerts(): Promise<ActiveAlert[]> {
   return newAlerts;
 }
 
-async function sendHANotifications(alerts: ActiveAlert[]): Promise<void> {
+async function sendHANotifications(alerts: ActiveAlert[], config: AlertConfig): Promise<void> {
   if (alerts.length === 0) return;
   try {
     const ha = await HomeAssistantClient.fromConnection();
@@ -287,9 +287,24 @@ async function sendHANotifications(alerts: ActiveAlert[]): Promise<void> {
         message,
         notification_id: notificationId,
       });
+
+      await ha.fireEvent('spoolmansync_low_filament', {
+        group_key: alert.groupKey,
+        group_label: alert.groupLabel,
+        material: alert.material,
+        filament_name: alert.filament_name ?? null,
+        vendor: alert.vendor ?? null,
+        color_hex: alert.color_hex ?? null,
+        spool_count: alert.spoolCount,
+        lowest_remaining_g: alert.lowestRemaining,
+        lowest_percentage: alert.lowestPercentage,
+        threshold_type: config.thresholdType,
+        threshold_value: config.thresholdValue,
+        timestamp: alert.timestamp,
+      });
     }
   } catch (err) {
-    console.error('Failed to send HA notifications:', err);
+    console.error('Failed to send HA notifications/events:', err);
   }
 }
 

@@ -31,6 +31,20 @@ function isValidTrayUuid(tray_uuid: string | undefined | null): boolean {
   return true;
 }
 
+/** Extracts tray number and external-spool flag from entity_id patterns like `..._tray_1_2` or `..._external_spool_1` */
+function parseTrayInfo(trayEntityId: string): { tray_number: number | null; is_external: boolean } {
+  const externalMatch = trayEntityId.match(/_external_spool_?(\d*)$/);
+  if (externalMatch) {
+    return { tray_number: externalMatch[1] ? parseInt(externalMatch[1], 10) : null, is_external: true };
+  }
+  const trayMatch = trayEntityId.match(/_tray_(\d+)(?:_(\d+))?$/);
+  if (trayMatch) {
+    const num = trayMatch[2] ? parseInt(trayMatch[2], 10) : parseInt(trayMatch[1], 10);
+    return { tray_number: num, is_external: false };
+  }
+  return { tray_number: null, is_external: false };
+}
+
 /**
  * Material density lookup (g/cm³) for converting filament length to weight.
  * Used when Creality printers report usage in cm instead of grams.
@@ -317,6 +331,30 @@ export async function POST(request: NextRequest) {
             details: { spoolId: matchedSpool.id, trayId: tray_entity_id, matchedBy: 'spool_serial', trayUuid: tray_uuid },
           });
 
+          try {
+            const ha = await HomeAssistantClient.fromConnection();
+            if (ha) {
+              const trayInfo = parseTrayInfo(tray_entity_id);
+              await ha.fireEvent('spoolmansync_spool_assigned', {
+                tray_entity_id,
+                tray_unique_id: trayUniqueId,
+                tray_number: trayInfo.tray_number,
+                is_external: trayInfo.is_external,
+                matched_by: 'spool_serial',
+                spool_id: matchedSpool.id,
+                filament_name: matchedSpool.filament.name ?? null,
+                material: matchedSpool.filament.material ?? null,
+                color_hex: matchedSpool.filament.color_hex ?? null,
+                vendor: matchedSpool.filament.vendor?.name ?? null,
+                remaining_weight_g: matchedSpool.remaining_weight,
+                printer_reports: { name: name ?? null, material: material ?? null, color: color ?? null, tray_uuid: tray_uuid ?? null },
+                timestamp: Date.now(),
+              });
+            }
+          } catch (err) {
+            console.error('Failed to fire spoolmansync_spool_assigned event:', err);
+          }
+
           return NextResponse.json({
             status: 'success',
             spool: matchedSpool,
@@ -357,6 +395,30 @@ export async function POST(request: NextRequest) {
               message: `Auto-assigned spool #${mappedSpool.id} to ${tray_entity_id} (matched by filament mapping)`,
               details: { spoolId: mappedSpool.id, trayId: tray_entity_id, matchedBy: 'filament_mapping', mapping: normalized },
             });
+
+            try {
+              const ha = await HomeAssistantClient.fromConnection();
+              if (ha) {
+                const trayInfo = parseTrayInfo(tray_entity_id);
+                await ha.fireEvent('spoolmansync_spool_assigned', {
+                  tray_entity_id,
+                  tray_unique_id: trayUniqueId,
+                  tray_number: trayInfo.tray_number,
+                  is_external: trayInfo.is_external,
+                  matched_by: 'filament_mapping',
+                  spool_id: mappedSpool.id,
+                  filament_name: mappedSpool.filament.name ?? null,
+                  material: mappedSpool.filament.material ?? null,
+                  color_hex: mappedSpool.filament.color_hex ?? null,
+                  vendor: mappedSpool.filament.vendor?.name ?? null,
+                  remaining_weight_g: mappedSpool.remaining_weight,
+                  printer_reports: { name: name ?? null, material: material ?? null, color: color ?? null, tray_uuid: tray_uuid ?? null },
+                  timestamp: Date.now(),
+                });
+              }
+            } catch (err) {
+              console.error('Failed to fire spoolmansync_spool_assigned event:', err);
+            }
 
             return NextResponse.json({
               status: 'success',
@@ -427,6 +489,25 @@ export async function POST(request: NextRequest) {
         timestamp: Date.now(),
       };
       spoolEvents.emit(SPOOL_UPDATED, updateEvent);
+
+      try {
+        const ha = await HomeAssistantClient.fromConnection();
+        if (ha) {
+          const trayInfo = parseTrayInfo(tray_entity_id);
+          await ha.fireEvent('spoolmansync_spool_not_matched', {
+            tray_entity_id,
+            tray_unique_id: trayUniqueId,
+            tray_number: trayInfo.tray_number,
+            is_external: trayInfo.is_external,
+            had_valid_rfid: isValidTrayUuid(tray_uuid),
+            previous_spool_unassigned: unassignedSpoolId ?? null,
+            printer_reports: { name: name ?? null, material: material ?? null, color: color ?? null, tray_uuid: tray_uuid ?? null },
+            timestamp: Date.now(),
+          });
+        }
+      } catch (err) {
+        console.error('Failed to fire spoolmansync_spool_not_matched event:', err);
+      }
 
       return NextResponse.json({
         status: 'no_match',

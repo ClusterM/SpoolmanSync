@@ -17,6 +17,7 @@ No YAML editing. No Home Assistant expertise required.
 - **Multi-brand support** — Bambu Lab and Creality printers side-by-side on one dashboard
 - **Automatic usage tracking** — filament weight deducted from the correct spool when prints complete
 - **QR & NFC** — scan Spoolman QR codes, print your own QR labels, or write NFC stickers for instant assignment
+- **Filament mapping** — remember printer-reported name, material, and color for each spool so the next tray change can assign the right spool without opening SpoolmanSync (optional; see below)
 - **Low stock alerts** — Home Assistant notifications when you're down to your last spool of a type
 - **Multi-AMS / multi-CFS** — works with any combination of units per printer
 - **Localized Home Assistant** — supports non-English HA installations (German, Dutch, Spanish, Italian, etc.)
@@ -73,10 +74,19 @@ That's it. When prints complete, filament weight is automatically deducted from 
 
 SpoolmanSync discovers your printers and their AMS/CFS trays from Home Assistant (via ha-bambulab or ha_creality_ws). When you assign a spool to a tray, the assignment is stored in Spoolman's `extra.active_tray` field. Home Assistant automations send webhook events on tray changes and print completion, and SpoolmanSync deducts filament weight from the correct spool in Spoolman.
 
-Spool matching works in three ways:
+Spool matching works in several ways:
 - **Manual assignment** (all vendors) — click a tray, pick a spool
 - **RFID auto-match** (Bambu spools with tags, Creality CFS spools with RFID) — remembers which physical spool is which for future swaps
+- **Filament mapping** (no RFID/QR) — if you only pick filament type and color on the printer or in Bambu Studio, SpoolmanSync can learn that combination once and auto-assign the matching Spoolman spool on the next tray change (see below)
 - **QR code / NFC** (any vendor) — scan printed QR labels or NFC stickers with your phone to assign
+
+### Filament mapping (automatic spool selection without RFID or QR)
+
+Many third-party or refill spools have no Bambu RFID tag and no printed QR in Spoolman. You still tell the printer **which filament** it should assume (name, material, color) on the display or in the slicer. SpoolmanSync receives that same data from Home Assistant, but without a tag or scan it used to stop at “no match” — you had to open the web UI and assign the spool by hand every time.
+
+**Filament mapping** fixes that: when you assign a spool to a tray **once** (while the printer reports a non-empty name/material/color), SpoolmanSync can store a mapping from that triple to your chosen Spoolman spool. Later, when you only change color or material on the printer, the `tray_change` webhook can resolve the right spool automatically. You can enable or disable auto-creation of mappings in **Settings**, review and edit mappings on the **Mappings** page, and optionally show printer-reported filament info on the dashboard.
+
+If nothing matches (RFID, mapping, or missing archived spool), the tray is left unassigned so stale assignments do not linger. Mappings are not created when the printer reports “Empty” for name or material (empty slot).
 
 ## Low Stock Alerts
 
@@ -86,6 +96,35 @@ Get notified via Home Assistant when you're down to your last spool of a filamen
 - Selective monitoring — track only the groups you care about
 
 Alerts fire only when you're on your *last* spool of a group — no noise from partially-used spools when you have backups.
+
+## Home Assistant custom events
+
+SpoolmanSync fires custom events into Home Assistant. Listen under **Developer Tools → Events**; in automations use an **Event** trigger and read `trigger.event.data`. Event delivery is best-effort (failures do not break webhooks).
+
+Available events:
+
+- **`spoolmansync_low_filament`** — a low-stock alert newly becomes active (same moment as the SpoolmanSync persistent notification).
+- **`spoolmansync_spool_assigned`** — the `tray_change` webhook auto-assigns a spool (RFID/serial match or filament mapping).
+- **`spoolmansync_spool_not_matched`** — the tray reports filament but no spool could be auto-assigned.
+
+Example automation when a spool is auto-assigned (`persistent_notification`; swap for `notify.mobile_app_*` or another notify integration if you prefer):
+
+```yaml
+alias: SpoolmanSync notify on auto-assign
+trigger:
+  - platform: event
+    event_type: spoolmansync_spool_assigned
+action:
+  - service: persistent_notification.create
+    data:
+      title: "SpoolmanSync: spool assigned"
+      message: >-
+        {{ trigger.event.data.filament_name | default('Unknown', true) }}
+        on {{ trigger.event.data.tray_entity_id }}
+        ({{ trigger.event.data.matched_by }})
+      notification_id: >-
+        spoolmansync_assign_{{ trigger.event.data.tray_entity_id | replace('.','_') }}
+```
 
 ## Troubleshooting
 

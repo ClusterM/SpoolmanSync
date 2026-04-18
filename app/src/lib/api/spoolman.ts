@@ -38,6 +38,24 @@ export interface Spool {
   lot_nr?: string;
 }
 
+/** Cleared tray assignment in Spoolman extra.active_tray */
+const EMPTY_ACTIVE_TRAY_JSON = JSON.stringify('');
+
+/** True if active_tray extra means no tray assignment */
+export function isSpoolActiveTrayEmpty(activeTrayRaw: string | undefined | null): boolean {
+  if (activeTrayRaw == null || activeTrayRaw === '') return true;
+  return activeTrayRaw === EMPTY_ACTIVE_TRAY_JSON;
+}
+
+/**
+ * True if the spool is already assigned to this tray (matches unique_id or legacy entity_id JSON).
+ */
+export function isSpoolAssignedToTray(spool: Spool, trayUniqueId: string, trayEntityId: string): boolean {
+  const raw = spool.extra?.['active_tray'];
+  if (isSpoolActiveTrayEmpty(raw)) return false;
+  return raw === JSON.stringify(trayUniqueId) || raw === JSON.stringify(trayEntityId);
+}
+
 export interface UpdateTrayPayload {
   spool_id: number;
   active_tray_id: string;
@@ -230,8 +248,13 @@ export class SpoolmanClient {
    * Assign a spool to a tray
    */
   async assignSpoolToTray(spoolId: number, trayId: string): Promise<Spool> {
-    // First, unassign any spool currently in this tray
     const currentSpools = await this.getSpoolsByTray(trayId);
+    // Already the only spool on this tray — no-op (avoids duplicate PATCH / callers can skip side effects)
+    if (currentSpools.length === 1 && currentSpools[0].id === spoolId) {
+      return await this.getSpool(spoolId);
+    }
+
+    // Unassign any other spool currently in this tray
     for (const spool of currentSpools) {
       if (spool.id !== spoolId) {
         await this.unassignSpoolFromTray(spool.id);
@@ -264,6 +287,10 @@ export class SpoolmanClient {
   async unassignSpoolFromTray(spoolId: number): Promise<Spool> {
     // Get current spool to preserve other extra fields
     const spool = await this.getSpool(spoolId);
+
+    if (isSpoolActiveTrayEmpty(spool.extra?.['active_tray'])) {
+      return spool;
+    }
 
     // Build new extra object with active_tray set to empty string
     // Spoolman's PATCH replaces the entire extra object, so we need to include

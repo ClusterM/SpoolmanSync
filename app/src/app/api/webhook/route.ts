@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { SpoolmanClient } from '@/lib/api/spoolman';
+import { SpoolmanClient, isSpoolAssignedToTray } from '@/lib/api/spoolman';
 import { HomeAssistantClient } from '@/lib/api/homeassistant';
 import { spoolEvents, SPOOL_UPDATED, SpoolUpdateEvent } from '@/lib/events';
 import { createActivityLog } from '@/lib/activity-log';
@@ -313,6 +313,15 @@ export async function POST(request: NextRequest) {
         const matchedSpool = await client.findSpoolByTag(tray_uuid);
 
         if (matchedSpool) {
+          if (isSpoolAssignedToTray(matchedSpool, trayUniqueId, tray_entity_id)) {
+            return NextResponse.json({
+              status: 'success',
+              spool: matchedSpool,
+              matchedBy: 'spool_serial',
+              unchanged: true,
+            });
+          }
+
           await client.assignSpoolToTray(matchedSpool.id, trayUniqueId);
 
           // Emit real-time update event
@@ -379,6 +388,15 @@ export async function POST(request: NextRequest) {
         if (mapping) {
           const mappedSpool = spools.find(s => s.id === mapping.spoolId && !s.archived);
           if (mappedSpool) {
+            if (isSpoolAssignedToTray(mappedSpool, trayUniqueId, tray_entity_id)) {
+              return NextResponse.json({
+                status: 'success',
+                spool: mappedSpool,
+                matchedBy: 'filament_mapping',
+                unchanged: true,
+              });
+            }
+
             await client.assignSpoolToTray(mappedSpool.id, trayUniqueId);
 
             const updateEvent: SpoolUpdateEvent = {
